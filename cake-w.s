@@ -219,6 +219,16 @@ CGRAMLoop:
 
         ; here we would place all of the game logic
         ; and loop forever
+ProcessInput:
+        lda Joy1HeldHigh ; high byte
+        and #$01
+        cmp #$01
+        bcc NoInput
+        lda SPRITE_KEKW
+        clc
+        adc #$01
+        sta SPRITE_KEKW
+NoInput:
 
         jmp GameLoop
 .endproc
@@ -229,7 +239,9 @@ CGRAMLoop:
 ;-------------------------------------------------------------------------------
 .proc   VBlank
         lda RDNMI               ; read NMI status, acknowledge NMI
-
+        jsr DMAOAM
+        lda #$02                ; enable the DMA channel 2 transfer
+        sta MDMAEN
 Joypad:
         lda $4212           ; auto-read joypad status
         and #$01            ;
@@ -254,24 +266,7 @@ Joypad:
         txa                 ; Transfer last frame input from X -> A again
         and Joy1Raw	        ; Find buttons that are still pressed (held)
         sta Joy1Held        ; by storing only buttons that are pressed both frames
-
-ProcessInput:
-        ; still in 16-bit A/X/Y
-        ; not anymore!
         Set8
-        lda Joy1HeldHigh ; high byte
-        and #$01
-        cmp #$01
-        bcc NoInput
-        lda SPRITE_KEKW
-        clc
-        adc #$01
-        sta SPRITE_KEKW
-NoInput:
-        Set8
-        jsr DMAOAM
-        lda #$02                ; enable the DMA channel 2 transfer
-        sta MDMAEN
         rti
 .endproc
 ;-------------------------------------------------------------------------------
