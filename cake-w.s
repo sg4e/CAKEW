@@ -34,14 +34,17 @@ DAS1L       = $4315     ; DMA size register low, channel 1
 ; my labels
 OAMMIRROR   = $1800     ; leaving 1.5k for the stack
 SPRITE_OAM_BYTE_SIZE = $4
+HORIZONTAL_SPEED = $01
+VERTICAL_SPEED = $01
 
 Joy1Raw     = $17FA     ; Holder of RAW joypad data from register (from last frame)
+Joy1RawHigh = $17FB
 
-Joy1Press   = $17FC     ; Contains only pressed buttons (not held down)
-Joy1PressHigh   = $17FD
+;Joy1Press   = $17FC     ; Contains only pressed buttons (not held down)
+;Joy1PressHigh   = $17FD
 
-Joy1Held    = $17FE     ; Contains only buttons that are Held
-Joy1HeldHigh    = $17FF
+;Joy1Held    = $17FE     ; Contains only buttons that are Held
+;Joy1HeldHigh    = $17FF
 
 ; sprites
 SPRITE_KEKW = OAMMIRROR + $00
@@ -220,16 +223,46 @@ CGRAMLoop:
         ; here we would place all of the game logic
         ; and loop forever
 ProcessInput:
-        lda Joy1HeldHigh ; high byte
-        and #$01
-        cmp #$01
-        bcc NoInput
+        lda Joy1RawHigh
+        and #(Button_Right)
+        beq RightInput
         lda SPRITE_KEKW
         clc
-        adc #$01
+        adc #(HORIZONTAL_SPEED)
         sta SPRITE_KEKW
-NoInput:
-
+        ; flip sprite for movement
+        lda SPRITE_KEKW + 3
+        ora #%01000000
+        sta SPRITE_KEKW + 3
+RightInput:
+        lda Joy1RawHigh
+        and #(Button_Left)
+        beq UpInput
+        lda SPRITE_KEKW
+        clc
+        sbc #(HORIZONTAL_SPEED - 1)
+        sta SPRITE_KEKW
+        ; unflip sprite
+        lda SPRITE_KEKW + 3
+        and #%10111111
+        sta SPRITE_KEKW + 3
+UpInput:
+        lda Joy1RawHigh
+        and #(Button_Up)
+        beq DownInput
+        lda SPRITE_KEKW + 1
+        clc
+        sbc #(VERTICAL_SPEED - 1)
+        sta SPRITE_KEKW + 1
+DownInput:
+        lda Joy1RawHigh
+        and #(Button_Down)
+        beq NoMoreInput
+        lda SPRITE_KEKW + 1
+        clc
+        adc #(VERTICAL_SPEED)
+        sta SPRITE_KEKW + 1
+NoMoreInput:
         jmp GameLoop
 .endproc
 ;-------------------------------------------------------------------------------
@@ -254,18 +287,18 @@ Joypad:
                             ; the log will be 0 the first time read of course..
         lda $4218           ; Read current frame's RAW joypad data
         sta Joy1Raw         ; save it for next frame.. (last frame log is still in X)
-        txa                 ; transfer last frame input from X -> A (it's still in X)
-        eor Joy1Raw         ; Xor last frame input with current frame input
+        ;txa                 ; transfer last frame input from X -> A (it's still in X)
+        ;eor Joy1Raw         ; Xor last frame input with current frame input
                             ; shows the changes in input
                             ; buttons just pressed or just released become set.
                             ; Held or unactive buttons are 0
-        and Joy1Raw         ; AND changes to current frame's input.
+        ;and Joy1Raw         ; AND changes to current frame's input.
                             ; this ends up leaving you with the only the buttons that
                             ; are pressed.. It's MAGIC!
-        sta Joy1Press       ; Store just pressed buttons
-        txa                 ; Transfer last frame input from X -> A again
-        and Joy1Raw	        ; Find buttons that are still pressed (held)
-        sta Joy1Held        ; by storing only buttons that are pressed both frames
+        ;sta Joy1Press       ; Store just pressed buttons
+        ;txa                 ; Transfer last frame input from X -> A again
+        ;and Joy1Raw	        ; Find buttons that are still pressed (held)
+        ;sta Joy1Held        ; by storing only buttons that are pressed both frames
         Set8
         rti
 .endproc
