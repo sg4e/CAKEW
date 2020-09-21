@@ -176,7 +176,26 @@ CGRAMLoop:
         sta SPRITE_KEKW + 2
         lda #$00                ; no flip, prio 0, palette 0
         sta SPRITE_KEKW + 3
+        ; move all other sprite slots off screen
+        SetIndex16
+        ldx #(SPRITE_OAM_BYTE_SIZE + 1) ; y offset
+        lda #(256 - 32)
+InitOAM:
+        sta OAMMIRROR, x
+        inx
+        inx
+        inx
+        inx
+        cpx #512
+        blt InitOAM
+        SetIndex8
+
         jsr DMAOAM
+        ; override DMA transfer amount for full transfer
+        Set16
+        lda #512
+        sta DAS1L
+        Set8
         lda #$02                ; enable the DMA channel 2 transfer
         sta MDMAEN
 
