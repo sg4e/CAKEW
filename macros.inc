@@ -27,3 +27,7 @@
 .macro blt arg
       bcc arg
 .endmacro
+
+.macro debug
+      .byte $42, $00
+.endmacro

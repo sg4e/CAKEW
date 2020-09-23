@@ -33,9 +33,14 @@ DAS1L       = $4315     ; DMA size register low, channel 1
 
 ; my labels
 OAMMIRROR   = $1800     ; leaving 1.5k for the stack
+SPRITE_SIZE = 32
 SPRITE_OAM_BYTE_SIZE = $4
 HORIZONTAL_SPEED = $01
 VERTICAL_SPEED = $01
+SNES_HEIGHT = 224
+SNES_WIDTH = 256
+MAX_SPRITE_RIGHT = SNES_WIDTH - SPRITE_SIZE
+MAX_SPRITE_DOWN = SNES_HEIGHT - SPRITE_SIZE
 
 Joy1Raw     = $17FA     ; Holder of RAW joypad data from register (from last frame)
 Joy1RawHigh = $17FB
@@ -76,7 +81,7 @@ ColorData:  .incbin "KEKW-14.pal"
 ;-------------------------------------------------------------------------------
 
 .segment "CODE"
-.include "macros.s"
+.include "macros.inc"
 ;-------------------------------------------------------------------------------
 ;   This is the entry point of the demo
 ;-------------------------------------------------------------------------------
@@ -244,8 +249,12 @@ InitOAM:
 ProcessInput:
         lda Joy1RawHigh
         and #(Button_Right)
-        beq RightInput
+        beq LeftInput
         lda SPRITE_KEKW
+        ; check bounds
+        cmp #MAX_SPRITE_RIGHT
+        bge LeftInput
+        ; move
         clc
         adc #(HORIZONTAL_SPEED)
         sta SPRITE_KEKW
@@ -253,11 +262,13 @@ ProcessInput:
         lda SPRITE_KEKW + 3
         ora #%01000000
         sta SPRITE_KEKW + 3
-RightInput:
+LeftInput:
         lda Joy1RawHigh
         and #(Button_Left)
         beq UpInput
         lda SPRITE_KEKW
+        cmp #$01
+        blt UpInput
         clc
         sbc #(HORIZONTAL_SPEED - 1)
         sta SPRITE_KEKW
@@ -270,6 +281,8 @@ UpInput:
         and #(Button_Up)
         beq DownInput
         lda SPRITE_KEKW + 1
+        cmp #$01
+        blt DownInput
         clc
         sbc #(VERTICAL_SPEED - 1)
         sta SPRITE_KEKW + 1
@@ -278,6 +291,8 @@ DownInput:
         and #(Button_Down)
         beq NoMoreInput
         lda SPRITE_KEKW + 1
+        cmp #MAX_SPRITE_DOWN
+        bge NoMoreInput
         clc
         adc #(VERTICAL_SPEED)
         sta SPRITE_KEKW + 1
