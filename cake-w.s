@@ -47,8 +47,10 @@ DAS1L       = $4315     ; DMA size register low, channel 1
 
 ; my labels
 OAMMIRROR   = $1800     ; leaving 1.5k for the stack
+OAMSIZE     = 512 + 32
 SPRITE_SIZE = 32
 SPRITE_OAM_BYTE_SIZE = $4
+UPPER_OAM   = OAMMIRROR + 512 ; OAM is 512 + 32
 HORIZONTAL_SPEED = $01
 VERTICAL_SPEED = $01
 SNES_HEIGHT = 224
@@ -66,7 +68,8 @@ Joy1RawHigh = $17FB
 ;Joy1HeldHigh    = $17FF
 
 ; sprites
-SPRITE_KEKW = OAMMIRROR + $00
+SPRITE_KEKW_OFFSET_IN_OAM = $00
+SPRITE_KEKW = OAMMIRROR + SPRITE_KEKW_OFFSET_IN_OAM
 
 ; input map
 .DEFINE Button_A		$80
@@ -92,6 +95,8 @@ SPRITE_KEKW = OAMMIRROR + $00
 .segment "SPRITEDATA"
 SpriteData: .incbin "KEKW-14.bin"
 ColorData:  .incbin "KEKW-14.pal"
+ShootSpriteData: .incbin "original sprites/shoot.bin"
+ShootColorData: .incbin "original sprites/shoot.pal"
 ;-------------------------------------------------------------------------------
 
 .segment "CODE"
@@ -108,7 +113,7 @@ ColorData:  .incbin "KEKW-14.pal"
         stz NMITIMEN            ; disable NMI
 
         ; set my sprite size
-        lda #%10100000
+        lda #%01100000          ; 16x16, large 32x32
         sta OBJSEL
 
         stz $4016 ; "otherwise the shift register gets stuck on the first bit, ie. all 16bit will be equal to the B-button state"
@@ -122,20 +127,21 @@ ColorData:  .incbin "KEKW-14.pal"
         ; transfer CGRAM data
         lda #$80
         sta CGADD               ; set CGRAM address to $80
-        ldx #$00                ; set X to zero, use it as loop counter and offset
-CGRAMLoop:
-        lda ColorData, X        ; get the color low byte
-        sta CGDATA              ; store it in CGRAM
-        inx                     ; increase counter/offset
-        lda ColorData, X        ; get the color high byte
-        sta CGDATA              ; store it in CGRAM
-        inx                     ; increase counter/offset
-        cpx #$20                ; check whether 32/$20 bytes were transfered
-        bcc CGRAMLoop           ; if not, continue loop
-
-        ;.byte $42, $00          ; debugger breakpoint
+        Set16
+        lda #ColorData
+        jsr LoadPalette
+        .a8
+        .i8
 
         ; set up OAM data
+        ; init OAM as all $00 so no surprises
+        SetIndex16
+        ldx #$00
+ClearOAM:
+        stz OAMMIRROR, x
+        inx
+        cpx #OAMSIZE
+        blt ClearOAM
         ; OAM data for first sprite
         lda # (256/2 - 8)       ; horizontal position of first sprite
         sta SPRITE_KEKW + 0
@@ -145,8 +151,9 @@ CGRAMLoop:
         sta SPRITE_KEKW + 2
         lda #$00                ; no flip, prio 0, palette 0
         sta SPRITE_KEKW + 3
+        lda #$02                ; sprite is large
+        sta UPPER_OAM           ; zero offset
         ; move all other sprite slots off screen
-        SetIndex16
         ldx #(SPRITE_OAM_BYTE_SIZE + 1) ; y offset
         lda #(256 - 32)
 InitOAM:
@@ -162,7 +169,7 @@ InitOAM:
         jsr DMAOAM
         ; override DMA transfer amount for full transfer
         Set16
-        lda #512
+        lda #OAMSIZE
         sta DAS1L
         Set8
         lda #$02                ; enable the DMA channel 2 transfer
@@ -188,6 +195,28 @@ InitOAM:
         sta NMITIMEN
 
         jmp GameLoop            ; all initialization is done
+.endproc
+
+; assumes 16-bit, returns 8-bit SO TELL THE STUPID ASSEMBLER WITH .a8 .i8
+; you need to set CGADD yourself
+; acc: the address that contains the palette data
+; cleanup: this subroutine will do it
+.proc LoadPalette
+        phd                     ; overwrite D with the palette-offset address
+        tcd
+        Set8
+        ldx #$00
+Loop:
+        lda $00, X              ; get the color low byte
+        sta CGDATA              ; store it in CGRAM
+        inx                     ; increase counter/offset
+        lda $00, X              ; get the color high byte
+        sta CGDATA              ; store it in CGRAM
+        inx                     ; increase counter/offset
+        cpx #$20                ; check whether 32/$20 bytes were transfered
+        bcc Loop                ; if not, continue loop
+        pld                     ; recover D
+        rts
 .endproc
 
 ; writes the OAM copy in RAM to real OAM by DMA
