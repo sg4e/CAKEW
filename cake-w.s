@@ -111,63 +111,13 @@ ColorData:  .incbin "KEKW-14.pal"
         lda #%10100000
         sta OBJSEL
 
-        ; transfer VRAM data
-        stz VMADDL              ; set the VRAM address to $0000
-        stz VMADDH
-        lda #$80
-        ;sta VMAINC              ; increment VRAM address by 1 when writing to VMDATAH
-        ldx #$00                ; set register X to zero, we will use X as a loop counter and offset
-        ;rep #$10
-        lda #%00000001          ; set DMA channel 0
-        sta DMAP0
-        lda #$18                ; set destination to VRAM
-        sta BBAD0
-        ;rep #$10
-        ;.i16
-        ldx #$00
-        ldy #$00
-        stz $00
-        stz $01
-        stz $02
-        stz $03
         stz $4016 ; "otherwise the shift register gets stuck on the first bit, ie. all 16bit will be equal to the B-button state"
-WriteVRAM:
-        ;$00 is the sprite offset; $02 is the VRAM offset
-        .a16
-        rep #$20
 
-        ;.byte $42, $00
-        lda $02
-        sta VMADDL
-        lda #(SpriteData) ;#$81          ; get address of OAMRAM mirror
-        clc
-        adc $00
-        ;.byte $42, $00
-        sta A1T0L               ; set low and high byte of address
-        ; calc next offsets
-        lda $00
-        clc
-        adc #512/4
-        sta $00
-        clc
-        lda $02
-        adc #512/2  ; VMADDL is WORD-based, not byte-based
-        sta $02
-        ;sta A1T0H
-        sep #$20
-        .a8
-        stz A1T0B               ; set bank to zero, since the mirror is in WRAM
-        lda #$200/4            ; set the number of bytes to transfer
-        sta DAS0L
-        stz DAS0H
-
-        lda #$01                ; start DMA transfer
-        sta MDMAEN
-        inx
-        cpx #$4
-        bcc WriteVRAM
-        ;sep #$10
-        ;.i8
+        Set16
+        ; initialize the stack pointer; for some reason it's auto-initialize too low at $01ff in bsnes
+        lda #$1fff
+        tcs
+        Set8
 
         ; transfer CGRAM data
         lda #$80
@@ -218,6 +168,15 @@ InitOAM:
         lda #$02                ; enable the DMA channel 2 transfer
         sta MDMAEN
 
+        ; load sprites into VRAM
+        Set16
+        lda #SpriteData
+        pha
+        lda #$0000
+        pha
+        Set8
+        jsr Write32PxSpriteToVRAM
+
         ; make Objects visible
         lda #$10
         sta TM
@@ -245,6 +204,51 @@ InitOAM:
         sta A1T1L
         lda #(SPRITE_OAM_BYTE_SIZE)
         sta DAS1L
+        Set8
+        rts
+.endproc
+
+; assumes 8-bit, returns as 8-bit
+; you need to clean up
+; stack args:
+; S, 1 and S, 2: D (pushed inside this subroutine)
+; S, 3 and S, 4: rts return address
+; push 1st: sprite offset in rom  (S, 7)
+; push 2nd: offset into VRAM      (S, 5)
+; uses DMA channel 0
+.proc Write32PxSpriteToVRAM
+        SetDirect
+        ;debug
+        VRAMOffset = $05
+        SpriteOffset = $07
+        SetIndex8
+        lda #%00000001          ; set DMA channel 0: VRAM type
+        sta DMAP0
+        lda #$18                ; set destination to VRAM
+        sta BBAD0
+        ldx #$00                ; count 4 cycles
+        stz A1T0B               ; set bank to zero
+        ldy #$01                ; stores the "Start DMA" bit
+        SetAcc16
+WriteLoop:
+        lda VRAMOffset
+        sta VMADDL
+        clc
+        adc #512/2  ; VMADDL is WORD-based, not byte-based
+        sta VRAMOffset
+        lda SpriteOffset
+        sta A1T0L               ; set low and high byte of address
+        ; calc next offsets
+        clc
+        adc #512/4
+        sta SpriteOffset
+        lda #512/4              ; set the number of bytes to transfer
+        sta DAS0L               ; this gets reset after each transfer #justSNESthings
+        sty MDMAEN            ; start DMA transfer
+        inx
+        cpx #$4
+        bcc WriteLoop
+        pld
         Set8
         rts
 .endproc

@@ -34,6 +34,16 @@
       sep #$10
 .endmacro
 
+.macro SetAcc16
+      .a16
+      rep #$20
+.endmacro
+
+.macro SetAcc8
+      .a8
+      sep #$20
+.endmacro
+
 .macro bge arg
       bcs arg
 .endmacro
@@ -44,4 +54,19 @@
 
 .macro debug
       .byte $42, $00
+.endmacro
+
+.macro RunDMA arg
+      lda arg
+      sta MDMAEN
+.endmacro
+
+.macro SetDirect
+      phd
+      tsc
+      tcd
+.endmacro
+
+.macro CleanDirect
+      pld
 .endmacro
