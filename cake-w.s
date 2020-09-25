@@ -46,6 +46,7 @@ A1T1B       = $4314     ; DMA source address register bank, channel 1
 DAS1L       = $4315     ; DMA size register low, channel 1
 
 ; my labels
+STACK_POINTER_INIT = $1fff
 OAMMIRROR   = $1800     ; leaving 1.5k for the stack
 OAMSIZE     = 512 + 32
 SPRITE_SIZE = 32
@@ -57,19 +58,28 @@ SNES_HEIGHT = 224
 SNES_WIDTH = 256
 MAX_SPRITE_RIGHT = SNES_WIDTH - SPRITE_SIZE
 MAX_SPRITE_DOWN = SNES_HEIGHT - SPRITE_SIZE
+MAX_FRIENDLY_PROJECTILES = 1 ; bugs with multiple projectiles to be fixed
+OFFSCREEN_Y = (256 - 32)
+FRIENDLY_PROJECTILE_SPEED = 2
 
 Joy1Raw     = $17FA     ; Holder of RAW joypad data from register (from last frame)
 Joy1RawHigh = $17FB
 
-;Joy1Press   = $17FC     ; Contains only pressed buttons (not held down)
-;Joy1PressHigh   = $17FD
+Joy1Press   = $17FC     ; Contains only pressed buttons (not held down)
+Joy1PressHigh   = $17FD
 
 ;Joy1Held    = $17FE     ; Contains only buttons that are Held
 ;Joy1HeldHigh    = $17FF
 
 ; sprites
+BULLET_SPRITE_VRAM_INDEX = 64
+BULLET_PALETTE = %00000010
 SPRITE_KEKW_OFFSET_IN_OAM = $00
 SPRITE_KEKW = OAMMIRROR + SPRITE_KEKW_OFFSET_IN_OAM
+FRIENDLY_PROJECTILES = OAMMIRROR + (4 * SPRITE_OAM_BYTE_SIZE)
+
+; memory
+NumberOfFriendlyProjectiles = $00 ; byte
 
 ; input map
 .DEFINE Button_A		$80
@@ -84,6 +94,13 @@ SPRITE_KEKW = OAMMIRROR + SPRITE_KEKW_OFFSET_IN_OAM
 .DEFINE Button_Down	$04
 .DEFINE Button_Left	$02
 .DEFINE Button_Right	$01
+
+.struct Sprite
+        xx    .byte       ; limitation: ca65 requires field name to be longer than 1 character
+        yy    .byte
+        tile  .byte
+        attr  .byte
+.endstruct
 
 ;-------------------------------------------------------------------------------
 
@@ -120,15 +137,24 @@ ShootColorData: .incbin "original sprites/shoot.pal"
 
         Set16
         ; initialize the stack pointer; for some reason it's auto-initialize too low at $01ff in bsnes
-        lda #$1fff
+        lda #STACK_POINTER_INIT
         tcs
         Set8
+        ; init all variables
+        stz NumberOfFriendlyProjectiles
 
         ; transfer CGRAM data
         lda #$80
         sta CGADD               ; set CGRAM address to $80
         Set16
         lda #ColorData
+        jsr LoadPalette
+        .a8
+        .i8
+        lda #$90
+        sta CGADD
+        Set16
+        lda #ShootColorData
         jsr LoadPalette
         .a8
         .i8
@@ -155,7 +181,7 @@ ClearOAM:
         sta UPPER_OAM           ; zero offset
         ; move all other sprite slots off screen
         ldx #(SPRITE_OAM_BYTE_SIZE + 1) ; y offset
-        lda #(256 - 32)
+        lda #OFFSCREEN_Y
 InitOAM:
         sta OAMMIRROR, x
         inx
@@ -167,11 +193,6 @@ InitOAM:
         SetIndex8
 
         jsr DMAOAM
-        ; override DMA transfer amount for full transfer
-        Set16
-        lda #OAMSIZE
-        sta DAS1L
-        Set8
         lda #$02                ; enable the DMA channel 2 transfer
         sta MDMAEN
 
@@ -182,7 +203,30 @@ InitOAM:
         lda #$0000
         pha
         Set8
-        jsr Write32PxSpriteToVRAM
+        lda #$01
+        pha
+        jsr WriteSpriteToVRAM
+        lda STACK_POINTER_INIT
+        pla
+        pla
+        pla
+        pla
+        pla
+        ; bullet sprite
+        Set16
+        lda #ShootSpriteData
+        pha
+        lda #$0800/2
+        pha
+        Set8
+        lda #$00
+        pha
+        jsr WriteSpriteToVRAM
+        pla
+        pla
+        pla
+        pla
+        pla
 
         ; make Objects visible
         lda #$10
@@ -231,35 +275,40 @@ Loop:
         stz OAMADDL
         lda #(OAMMIRROR)
         sta A1T1L
-        lda #(SPRITE_OAM_BYTE_SIZE)
+        lda #OAMSIZE
         sta DAS1L
         Set8
         rts
 .endproc
 
 ; assumes 8-bit, returns as 8-bit
-; you need to clean up
+; you need to clean up; clean up is 5 bytes
 ; stack args:
 ; S, 1 and S, 2: D (pushed inside this subroutine)
 ; S, 3 and S, 4: rts return address
-; push 1st: sprite offset in rom  (S, 7)
-; push 2nd: offset into VRAM      (S, 5)
+; push 1st: sprite offset in rom  (S, 8)
+; push 2nd: offset into VRAM      (S, 6)
+; push 3rd: sprite size: 0 == 16px, 1 == 32px, single byte (S, 5)
 ; uses DMA channel 0
-.proc Write32PxSpriteToVRAM
+.proc WriteSpriteToVRAM
         SetDirect
-        ;debug
-        VRAMOffset = $05
-        SpriteOffset = $07
+        BigBoolean = $05
+        VRAMOffset = $06
+        SpriteOffset = $08
         SetIndex8
+        ldy BigBoolean          ; stores boolean
         lda #%00000001          ; set DMA channel 0: VRAM type
         sta DMAP0
         lda #$18                ; set destination to VRAM
         sta BBAD0
-        ldx #$00                ; count 4 cycles
+        ldx #$02
+        cpy #$01
+        blt TwoRows
+        ldx #$00                ; count 4 cycles for 32px, 2 for 16px
+TwoRows:
         stz A1T0B               ; set bank to zero
-        ldy #$01                ; stores the "Start DMA" bit
-        SetAcc16
 WriteLoop:
+        SetAcc16
         lda VRAMOffset
         sta VMADDL
         clc
@@ -269,16 +318,26 @@ WriteLoop:
         sta A1T0L               ; set low and high byte of address
         ; calc next offsets
         clc
-        adc #512/4
+        adc #64
+        cpy #$01
+        blt StoreSpriteOffset
+        clc
+        adc #64
+StoreSpriteOffset:
         sta SpriteOffset
-        lda #512/4              ; set the number of bytes to transfer
+        lda #64             ; set the number of bytes to transfer
+        cpy #$01
+        blt SetData         ; it's a big 32px sprite
+        lda #128
+SetData:
         sta DAS0L               ; this gets reset after each transfer #justSNESthings
-        sty MDMAEN            ; start DMA transfer
+        SetAcc8
+        lda #$01
+        sta MDMAEN            ; start DMA transfer
         inx
         cpx #$4
         bcc WriteLoop
         pld
-        Set8
         rts
 .endproc
 
@@ -291,8 +350,6 @@ WriteLoop:
 .proc   GameLoop
         wai                     ; wait for NMI / V-Blank
 
-        ; here we would place all of the game logic
-        ; and loop forever
 ProcessInput:
         lda Joy1RawHigh
         and #(Button_Right)
@@ -336,15 +393,83 @@ UpInput:
 DownInput:
         lda Joy1RawHigh
         and #(Button_Down)
-        beq NoMoreInput
+        beq AInput
         lda SPRITE_KEKW + 1
         cmp #MAX_SPRITE_DOWN
-        bge NoMoreInput
+        bge AInput
         clc
         adc #(VERTICAL_SPEED)
         sta SPRITE_KEKW + 1
+AInput:
+        lda Joy1Press
+        and #Button_A
+        beq NoMoreInput
+        ; shoot
+        lda NumberOfFriendlyProjectiles
+        cmp #MAX_FRIENDLY_PROJECTILES
+        bge NoMoreInput
+        inc
+        sta NumberOfFriendlyProjectiles
 NoMoreInput:
+        jsr MoveProjectiles
         jmp GameLoop
+.endproc
+
+.proc MoveProjectiles
+        ldy #$00        ; use y as a loop counter
+        ldx #Sprite::xx
+        lda NumberOfFriendlyProjectiles
+        pha
+Loop:
+        cpy NumberOfFriendlyProjectiles
+        bge Cleanup
+        lda FRIENDLY_PROJECTILES + Sprite::yy, x
+        ; check if new projectile
+        cmp #OFFSCREEN_Y
+        bge CreateNewProj
+        ; move offscreen and kill projectile at 0 y
+        ; very important that these never go negative because offscreen == new projectile
+        cmp #FRIENDLY_PROJECTILE_SPEED
+        bge IsAlive
+        ; is dead
+        lda #OFFSCREEN_Y
+        sta FRIENDLY_PROJECTILES + Sprite::yy, x
+        lda $01, S
+        clc
+        sbc #$00
+        sta $01, S
+        ; this is bugged as soon as a proj dies; need better memory management -- or is it??!?!
+        bra GoToNextSprite
+CreateNewProj:
+        lda SPRITE_KEKW + Sprite::xx
+        clc
+        adc #8 ; center x
+        sta FRIENDLY_PROJECTILES + Sprite::xx, x
+        lda SPRITE_KEKW + Sprite::yy
+        clc
+        sbc #16 ; move y out of sprite
+        sta FRIENDLY_PROJECTILES + Sprite::yy, x
+        ; set sprite to bullet
+        lda #BULLET_SPRITE_VRAM_INDEX
+        sta FRIENDLY_PROJECTILES + Sprite::tile, x
+        lda #BULLET_PALETTE
+        sta FRIENDLY_PROJECTILES + Sprite::attr, x
+        bra GoToNextSprite
+IsAlive:
+        ; a still holds proj y
+        clc
+        sbc #(FRIENDLY_PROJECTILE_SPEED - 1)
+        sta FRIENDLY_PROJECTILES + Sprite::yy, x
+GoToNextSprite:
+        .repeat .sizeof(Sprite)
+        inx
+        .endrepeat
+        iny
+        bra Loop
+Cleanup:
+        pla
+        sta NumberOfFriendlyProjectiles
+        rts
 .endproc
 ;-------------------------------------------------------------------------------
 
@@ -353,6 +478,14 @@ NoMoreInput:
 ;-------------------------------------------------------------------------------
 .proc   VBlank
         lda RDNMI               ; read NMI status, acknowledge NMI
+        ; the CPU auto-pushes some registers on interrupt, but not a,x,y, so we have to do that
+        ; who knows if the registers are in 8-bit or 16-bit; we'll have to maintain them ourselves
+        pha
+        phx
+        phy
+        php
+
+        Set8
         jsr DMAOAM
         lda #$02                ; enable the DMA channel 2 transfer
         sta MDMAEN
@@ -368,19 +501,23 @@ Joypad:
                             ; the log will be 0 the first time read of course..
         lda $4218           ; Read current frame's RAW joypad data
         sta Joy1Raw         ; save it for next frame.. (last frame log is still in X)
-        ;txa                 ; transfer last frame input from X -> A (it's still in X)
-        ;eor Joy1Raw         ; Xor last frame input with current frame input
+        txa                 ; transfer last frame input from X -> A (it's still in X)
+        eor Joy1Raw         ; Xor last frame input with current frame input
                             ; shows the changes in input
                             ; buttons just pressed or just released become set.
                             ; Held or unactive buttons are 0
-        ;and Joy1Raw         ; AND changes to current frame's input.
+        and Joy1Raw         ; AND changes to current frame's input.
                             ; this ends up leaving you with the only the buttons that
                             ; are pressed.. It's MAGIC!
-        ;sta Joy1Press       ; Store just pressed buttons
+        sta Joy1Press       ; Store just pressed buttons
         ;txa                 ; Transfer last frame input from X -> A again
         ;and Joy1Raw	        ; Find buttons that are still pressed (held)
         ;sta Joy1Held        ; by storing only buttons that are pressed both frames
-        Set8
+
+        plp
+        ply
+        plx
+        pla
         rti
 .endproc
 ;-------------------------------------------------------------------------------
