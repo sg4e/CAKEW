@@ -58,7 +58,7 @@ SNES_HEIGHT = 224
 SNES_WIDTH = 256
 MAX_SPRITE_RIGHT = SNES_WIDTH - SPRITE_SIZE
 MAX_SPRITE_DOWN = SNES_HEIGHT - SPRITE_SIZE
-MAX_FRIENDLY_PROJECTILES = 1 ; bugs with multiple projectiles to be fixed
+MAX_FRIENDLY_PROJECTILES = 3
 OFFSCREEN_Y = (256 - 32)
 FRIENDLY_PROJECTILE_SPEED = 2
 
@@ -79,7 +79,9 @@ SPRITE_KEKW = OAMMIRROR + SPRITE_KEKW_OFFSET_IN_OAM
 FRIENDLY_PROJECTILES = OAMMIRROR + (4 * SPRITE_OAM_BYTE_SIZE)
 
 ; memory
-NumberOfFriendlyProjectiles = $00 ; byte
+.struct mem
+        FriendlyProjectilesMask       .byte
+.endstruct
 
 ; input map
 .DEFINE Button_A		$80
@@ -141,7 +143,12 @@ ShootColorData: .incbin "original sprites/shoot.pal"
         tcs
         Set8
         ; init all variables
-        stz NumberOfFriendlyProjectiles
+        ldx #$00
+ClearMem:
+        stz $00, x
+        inx
+        cpx .sizeof(mem)
+        blt ClearMem
 
         ; transfer CGRAM data
         lda #$80
@@ -405,24 +412,24 @@ AInput:
         and #Button_A
         beq NoMoreInput
         ; shoot
-        lda NumberOfFriendlyProjectiles
-        cmp #MAX_FRIENDLY_PROJECTILES
-        bge NoMoreInput
+        lda mem::FriendlyProjectilesMask
         inc
-        sta NumberOfFriendlyProjectiles
+        ora mem::FriendlyProjectilesMask
+        ; truncate high bits
+        and #(2 << (MAX_FRIENDLY_PROJECTILES - 1) - 1) ;#%00000111
+        sta mem::FriendlyProjectilesMask
 NoMoreInput:
         jsr MoveProjectiles
         jmp GameLoop
 .endproc
 
 .proc MoveProjectiles
-        ldy #$00        ; use y as a loop counter
         ldx #Sprite::xx
-        lda NumberOfFriendlyProjectiles
+        lda #$01
         pha
 Loop:
-        cpy NumberOfFriendlyProjectiles
-        bge Cleanup
+        and mem::FriendlyProjectilesMask
+        beq GoToNextSprite
         lda FRIENDLY_PROJECTILES + Sprite::yy, x
         ; check if new projectile
         cmp #OFFSCREEN_Y
@@ -435,10 +442,7 @@ Loop:
         lda #OFFSCREEN_Y
         sta FRIENDLY_PROJECTILES + Sprite::yy, x
         lda $01, S
-        clc
-        sbc #$00
-        sta $01, S
-        ; this is bugged as soon as a proj dies; need better memory management -- or is it??!?!
+        trb mem::FriendlyProjectilesMask
         bra GoToNextSprite
 CreateNewProj:
         lda SPRITE_KEKW + Sprite::xx
@@ -464,11 +468,12 @@ GoToNextSprite:
         .repeat .sizeof(Sprite)
         inx
         .endrepeat
-        iny
-        bra Loop
+        lda $01, S
+        asl
+        sta $01, S
+        bcc Loop
 Cleanup:
         pla
-        sta NumberOfFriendlyProjectiles
         rts
 .endproc
 ;-------------------------------------------------------------------------------
