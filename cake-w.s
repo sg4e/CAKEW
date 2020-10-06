@@ -19,6 +19,17 @@ OBJSEL      = $2101     ; object size $ object data area designation
 OAMADDL     = $2102     ; address for accessing OAM
 OAMADDH     = $2103
 OAMDATA     = $2104     ; data for OAM write
+BGMODE      = $2105
+BG1SC       = $2107
+BG2SC       = $2108
+BG3SC       = $2109
+BG4SC       = $210a
+BG12NBA     = $210b
+BG34NBA     = $210c
+BG1HOFS     = $210D
+BG1VOFS     = $210E
+BG2HOFS     = $210F
+BG2VOFS     = $2110
 VMAINC      = $2115     ; VRAM address increment value designation
 VMADDL      = $2116     ; address for VRAM read and write
 VMADDH      = $2117
@@ -45,6 +56,13 @@ A1T1H       = $4313     ; DMA source address register high, channel 1
 A1T1B       = $4314     ; DMA source address register bank, channel 1
 DAS1L       = $4315     ; DMA size register low, channel 1
 
+DMAP2       = $4320
+BBAD2       = $4321
+A1T2L       = $4322
+A1T2H       = $4323
+A1T2B       = $4324
+DAS2L       = $4325
+
 ; my labels
 STACK_POINTER_INIT = $1fff
 OAMMIRROR   = $1800     ; leaving 1.5k for the stack
@@ -61,6 +79,9 @@ MAX_SPRITE_DOWN = SNES_HEIGHT - SPRITE_SIZE
 MAX_FRIENDLY_PROJECTILES = 3
 OFFSCREEN_Y = (256 - 32)
 FRIENDLY_PROJECTILE_SPEED = 2
+BG_ROM_BANK = 1
+CIRCUS_BIN_SIZE = 4576
+CIRCUS_MAP_SIZE = 1792
 
 Joy1Raw     = $17FA     ; Holder of RAW joypad data from register (from last frame)
 Joy1RawHigh = $17FB
@@ -112,10 +133,19 @@ FRIENDLY_PROJECTILES = OAMMIRROR + (4 * SPRITE_OAM_BYTE_SIZE)
 
 ;----- Includes ----------------------------------------------------------------
 .segment "SPRITEDATA"
-SpriteData: .incbin "KEKW-14.bin"
-ColorData:  .incbin "KEKW-14.pal"
-ShootSpriteData: .incbin "original sprites/shoot.bin"
-ShootColorData: .incbin "original sprites/shoot.pal"
+.DEFINE CIRCUS_DIR "backgrounds/circus/"
+SpriteData: .incbin "sprites/imported/KEKW-14.bin"
+ColorData:  .incbin "sprites/imported/KEKW-14.pal"
+ShootSpriteData: .incbin "sprites/original/shoot.bin"
+ShootColorData: .incbin "sprites/original/shoot.pal"
+CircusColorData: .incbin .concat(CIRCUS_DIR, "circus.pal")
+
+.segment "BGDATA"
+CircusBin: .incbin .concat(CIRCUS_DIR, "circus.bin")
+CircusBinLoc = CircusBin & $FFFF
+CircusMap: .incbin .concat(CIRCUS_DIR, "circus.map")
+CircusMapLoc = CircusMap & $FFFF
+
 ;-------------------------------------------------------------------------------
 
 .segment "CODE"
@@ -162,6 +192,13 @@ ClearMem:
         sta CGADD
         Set16
         lda #ShootColorData
+        jsr LoadPalette
+        .a8
+        .i8
+        lda #$00
+        sta CGADD
+        Set16
+        lda #CircusColorData
         jsr LoadPalette
         .a8
         .i8
@@ -235,8 +272,46 @@ InitOAM:
         pla
         pla
 
-        ; make Objects visible
-        lda #$10
+        ; write background to VRAM
+        Set16
+        lda #CircusBinLoc
+        pha
+        lda #$4000
+        pha
+        lda #CIRCUS_BIN_SIZE
+        pha
+        Set8
+        lda #BG_ROM_BANK
+        pha
+        jsr DMABG
+        lda #$3         ; BG1 = 256 color, BG2 = 16
+        sta BGMODE
+        stz BG1HOFS
+        stz BG1VOFS
+        stz BG2HOFS
+        stz BG2VOFS
+        Set16
+        lda #CircusMapLoc
+        pha
+        lda #$2000
+        pha
+        lda #CIRCUS_MAP_SIZE
+        pha
+        Set8
+        lda #BG_ROM_BANK
+        pha
+        jsr DMABG
+        lda #%10000 * 2   ; set map offset * 1K words in VRAM (and map size)
+        sta BG2SC
+        lda #%10010 * 4
+        sta BG12NBA
+        lda #%10000 * 15   ; clear BG1 for now to be transparent
+        sta BG1SC
+        lda #$01
+        sta $2130           ; enable direct color
+
+        ; make Objects and BG visible
+        lda #$12
         sta TM
         ; release forced blanking, set screen to full brightness
         lda #$0f
@@ -285,6 +360,37 @@ Loop:
         lda #OAMSIZE
         sta DAS1L
         Set8
+        rts
+.endproc
+
+; uses DMA channel 2 to copy arbitrary data to VRAM
+; m flag: enter as 8-bit, return as 8-bit
+; cleanup: done by subroutine
+; parameters:
+; push 1st: byte offset in rom (16-bit)
+; push 2nd: word offset in VRAM (16-bit)
+; push 3rd: size in bytes to transfer (16-bit)
+; push 4th: source bank in rom (8-bit)
+.proc DMABG
+        SetIndex16
+        plx       ; the jsr push
+        lda #%00000001
+        sta DMAP2
+        lda #$18
+        sta BBAD2
+        pla
+        sta A1T2B
+        Set16
+        pla       ; byte count
+        sta DAS2L
+        pla
+        sta VMADDL
+        pla
+        sta A1T2L
+        phx       ; push address back to the stack
+        Set8
+        lda #%00000100    ; channel 2
+        sta MDMAEN
         rts
 .endproc
 
