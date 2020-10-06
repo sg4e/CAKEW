@@ -154,9 +154,7 @@ CircusMapLoc = CircusMap & $FFFF
 ;   This is the entry point of the demo
 ;-------------------------------------------------------------------------------
 .proc   ResetHandler
-        sei                     ; disable interrupts
-        clc                     ; clear the carry flag
-        xce                     ; switch the 65816 to native (16-bit mode)
+        Snes_Init
         lda #$8f                ; force v-blanking
         sta INIDISP
         stz NMITIMEN            ; disable NMI
